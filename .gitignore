@@ -1,2 +1,5 @@
+include/
+lib/
+lib64/
 pyvenv.cfg
 src/Constants.py
