@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import sys
 from datetime import date
 from typing import List
 
@@ -11,30 +12,35 @@ import Constants
 from SteamGameClass import SteamGame
 
 
-async def get_list_of_discounted_games() -> List:
-    STEAM_STORE_API_URL = "https://store.steampowered.com/api/appdetails"
+def get_wishlist() -> List:
     wishlistURI = "https://api.steampowered.com/IWishlistService/GetWishlist/v1/"
+    wishlistAPIresp = httpx.get(
+        wishlistURI, params={"key": Constants.API_KEY, "steamid": Constants.STEAMID}
+    )
 
     steam_game_objects = []
-    output_list = []
 
-    # Getting Wishlist from Steam
-    for game in httpx.get(
-        wishlistURI, params={"key": Constants.API_KEY, "steamid": Constants.STEAMID}
-    ).json()["response"]["items"]:
-        steam_game_objects.append(
-            SteamGame(str(game["appid"]), game["priority"], game["date_added"])
-        )
+    # Getting Wishlist from Steam API
+    for game in wishlistAPIresp.json()["response"]["items"]:
+        if game["appid"] is None:
+            pass
+        else:
+            steam_game_objects.append(
+                SteamGame(str(game["appid"]), game["priority"], game["date_added"])
+            )
 
     # Sanity check and sorting of wishlisted items
-    # print(f"Total number of wishlisted games: {len(steam_game_objects)}")
-    # print("Sorting...")
     steam_game_objects = sorted(steam_game_objects, key=lambda game: game.priority)
+    return steam_game_objects
 
+
+async def get_list_of_discounted_games(wishlist: List) -> List:
     # Retrieving game and price data
     # print("Getting game information")
+    STEAM_STORE_API_URL = "https://store.steampowered.com/api/appdetails"
+    output_list = []
     async with httpx.AsyncClient() as client:
-        for game in steam_game_objects:
+        for game in wishlist:
             response = await client.get(
                 STEAM_STORE_API_URL, params={"appids": game.appID}
             )
@@ -54,10 +60,10 @@ async def get_list_of_discounted_games() -> List:
                     # print(
                     # f"{game.name} does not have price data removing game from list"
                     # )
-                    steam_game_objects.remove(game)
+                    wishlist.remove(game)
 
     # Cleaning output
-    for game in steam_game_objects:
+    for game in wishlist:
         if game.is_free:
             output_list.append(game)
         elif game.discount == 0:
@@ -84,7 +90,7 @@ def local_waybar_cache(out_data) -> None:
         with open(
             os.path.expanduser("~/.cache/steamsale/.steamsale_cache"), "w"
         ) as file:
-            json.dump(out_data, file)
+            json.dump(out_data, file, ensure_ascii=False)
     except FileNotFoundError:
         os.mkdir(os.path.expanduser(cache_dir))
 
@@ -106,31 +112,49 @@ def tooltip_text(gamelist) -> str:
         else:
             text = (
                 text
-                + f'<small><span foreground="yellow" weight="bold">{cleaned_name}</span>: <span style="italic">{item.price}</span><span foreground="green">({str(item.discount)}%)</span></small>\n'
+                + f'<span foreground="yellow" weight="bold">{cleaned_name}</span>: <span style="italic">{item.price}</span><span foreground="green">({str(item.discount)}%)</span>\n'
             )
 
-    tooltip_text = '\t\t<span size="xx-large">Steam Sales</span>\t\t\n' + text
+    tooltip_footer = "<small>Click this module to force reload</ small>"
+    tooltip_text = (
+        '<span size="xx-large" foreground="#66c0f4">Steam Sales</span>\n'
+        + text
+        + tooltip_footer
+    )
     return tooltip_text
 
 
 if __name__ == "__main__":
     cache_dir = "~/.cache/steamsale/"
+
     with open(os.path.expanduser(f"{cache_dir}.cache_date"), "r") as file:
         cache_date = file.readline()
 
-    if (cache_date == str(date.today())) and os.path.exists(
-        os.path.expanduser(f"{cache_dir}.steamsale_cache")
-    ):
-        with open(os.path.expanduser(f"{cache_dir}.steamsale_cache"), "r") as file:
-            out_data = json.load(file)
-        print(json.dumps(out_data))
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "--force-update":
+            list_of_sales = asyncio.run(get_list_of_discounted_games(get_wishlist()))
+            out_data = {
+                "text": " ",
+                "alt": "󰂭 ",
+                "tooltip": tooltip_text(list_of_sales),
+            }
+            print(json.dumps(out_data), flush=True)
+            update_cached_date()
+            local_waybar_cache(out_data)
     else:
-        list_of_sales = asyncio.run(get_list_of_discounted_games())
-        out_data = {
-            "text": " ",
-            "alt": "󰂭 ",
-            "tooltip": tooltip_text(list_of_sales),
-        }
-        print(json.dumps(out_data))
-        update_cached_date()
-        local_waybar_cache(out_data)
+        if (cache_date == str(date.today())) and os.path.exists(
+            os.path.expanduser(f"{cache_dir}.steamsale_cache")
+        ):
+            with open(os.path.expanduser(f"{cache_dir}.steamsale_cache"), "r") as file:
+                out_data = json.load(file)
+            print(json.dumps(out_data), flush=True)
+        else:
+            list_of_sales = asyncio.run(get_list_of_discounted_games(get_wishlist()))
+            out_data = {
+                "text": " ",
+                "alt": "󰂭 ",
+                "tooltip": tooltip_text(list_of_sales),
+            }
+            print(json.dumps(out_data), flush=True)
+            update_cached_date()
+            local_waybar_cache(out_data)
