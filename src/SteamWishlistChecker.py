@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 import asyncio
 import json
+import os
+from datetime import date
 from typing import List
 
 import httpx
@@ -9,7 +11,7 @@ import Constants
 from SteamGameClass import SteamGame
 
 
-async def main() -> List:
+async def get_list_of_discounted_games() -> List:
     STEAM_STORE_API_URL = "https://store.steampowered.com/api/appdetails"
     wishlistURI = "https://api.steampowered.com/IWishlistService/GetWishlist/v1/"
 
@@ -66,10 +68,31 @@ async def main() -> List:
     return output_list
 
 
-if __name__ == "__main__":
-    list_of_sales = asyncio.run(main())
+def update_cached_date() -> None:
+    cache_dir = "~/.cache/steamsale"
+    try:
+        with open(os.path.expanduser(f"{cache_dir}/.cache_date"), "w+") as file:
+            file.write(str(date.today()))
+    except FileNotFoundError:
+        os.mkdir(os.path.expanduser(cache_dir))
+
+
+def local_waybar_cache(out_data) -> None:
+    cache_dir = "~/.cache/steamsale"
+
+    try:
+        with open(
+            os.path.expanduser("~/.cache/steamsale/.steamsale_cache"), "w"
+        ) as file:
+            json.dump(out_data, file)
+    except FileNotFoundError:
+        os.mkdir(os.path.expanduser(cache_dir))
+
+
+def tooltip_text(gamelist) -> str:
     text = ""
-    for item in list_of_sales:
+
+    for item in gamelist:
         cleaned_name = item.name
         cleaned_name = cleaned_name.translate(
             str.maketrans(
@@ -79,22 +102,35 @@ if __name__ == "__main__":
             )
         )
         if item.is_free:
-            text = text + f"<small>{cleaned_name} is FREE!</small>\n"
+            text = text + f'<span foreground="green">{cleaned_name} is FREE!</span>\n'
         else:
             text = (
                 text
-                + f"<small>{cleaned_name}: {item.price}({str(item.discount)}%)</small>\n"
+                + f'<small><span foreground="yellow" weight="bold">{cleaned_name}</span>: <span style="italic">{item.price}</span><span foreground="green">({str(item.discount)}%)</span></small>\n'
             )
 
-    tooltip_text = '\t\t<span size="x-large">Steam Sales</span>\t\t\n' + text
-    out_data = {
-        "text": " ",
-        "alt": "󰂭 ",
-        "tooltip": tooltip_text,
-    }
-    print(json.dumps(out_data))
-    # try:
-    #     with open(os.path.expanduser("~/.cache/.steamsale_cache"), "w") as file:
-    #         file.write(json.dumps(out_data))
-    # except:
-    #     pass
+    tooltip_text = '\t\t<span size="xx-large">Steam Sales</span>\t\t\n' + text
+    return tooltip_text
+
+
+if __name__ == "__main__":
+    cache_dir = "~/.cache/steamsale/"
+    with open(os.path.expanduser(f"{cache_dir}.cache_date"), "r") as file:
+        cache_date = file.readline()
+
+    if (cache_date == str(date.today())) and os.path.exists(
+        os.path.expanduser(f"{cache_dir}.steamsale_cache")
+    ):
+        with open(os.path.expanduser(f"{cache_dir}.steamsale_cache"), "r") as file:
+            out_data = json.load(file)
+        print(json.dumps(out_data))
+    else:
+        list_of_sales = asyncio.run(get_list_of_discounted_games())
+        out_data = {
+            "text": " ",
+            "alt": "󰂭 ",
+            "tooltip": tooltip_text(list_of_sales),
+        }
+        print(json.dumps(out_data))
+        update_cached_date()
+        local_waybar_cache(out_data)
